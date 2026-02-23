@@ -1,0 +1,320 @@
+"""LLM Strategy Translation - Converts plain English to structured trading rules."""
+
+import os
+import json
+import re
+import httpx
+from typing import Optional
+
+
+# ─── Strategy Classification ───────────────────────────────────────
+
+STRATEGY_CLASSIFICATIONS = {
+    "rsi": {
+        "default": "mean_reversion",
+        "description": "RSI is inherently a mean-reversion indicator — it identifies overbought/oversold conditions expecting price to revert to the mean.",
+        "reasoning": {
+            "mean_reversion": "Buying oversold (low RSI) and selling overbought (high RSI) is classic mean reversion — betting price returns to its average.",
+            "trend_following": "Some traders use RSI breakouts (e.g., RSI > 50 = bullish) as trend confirmation.",
+        },
+    },
+    "ma_crossover": {
+        "default": "trend_following",
+        "description": "Moving average crossovers are classic trend-following signals — they identify and ride momentum when a shorter MA overtakes a longer one.",
+        "reasoning": {
+            "trend_following": "Fast MA crossing above slow MA indicates upward momentum — you're following the trend, not betting against it.",
+        },
+    },
+    "bollinger": {
+        "mean_reversion": {
+            "description": "Bollinger Band bounce strategies are mean reversion — buying at the lower band expects price to revert to the middle band (mean).",
+            "reasoning": "Price touching the lower band is ~2σ below the mean — statistically likely to revert. You're betting on normalization.",
+        },
+        "breakout": {
+            "description": "Bollinger Band breakout strategies are trend-following — buying above the upper band expects momentum continuation.",
+            "reasoning": "Price breaking above the upper band signals strong momentum. You're following the trend expecting continuation.",
+        },
+    },
+    "macd": {
+        "default": "trend_following",
+        "description": "MACD is a trend-following momentum indicator — crossovers signal the beginning of new momentum phases.",
+        "reasoning": {
+            "trend_following": "MACD line crossing above signal indicates accelerating bullish momentum — a classic trend-following entry.",
+        },
+    },
+    "breakout": {
+        "default": "trend_following",
+        "description": "Price breakout strategies are trend-following — breaking a N-day high/low signals new momentum you aim to ride.",
+        "reasoning": {
+            "trend_following": "New highs/lows indicate strong directional momentum. Breakout traders follow the trend expecting continuation (Donchian/Turtle style).",
+        },
+    },
+}
+
+
+def classify_strategy(rules: dict) -> dict:
+    """Classify a strategy as mean reversion or trend following with reasoning."""
+    strategy_type = rules.get("strategy_type", "rsi")
+    params = rules.get("parameters", {})
+
+    classification_info = STRATEGY_CLASSIFICATIONS.get(strategy_type)
+    if not classification_info:
+        return {
+            "classification": "unknown",
+            "label": "Unknown",
+            "description": "Strategy type could not be classified.",
+            "reasoning": "Insufficient information to determine strategy nature.",
+            "confidence": "low",
+        }
+
+    # Bollinger has mode-dependent classification
+    if strategy_type == "bollinger":
+        mode = params.get("mode", "mean_reversion")
+        info = classification_info.get(mode, classification_info.get("mean_reversion"))
+        classification = "mean_reversion" if mode == "mean_reversion" else "trend_following"
+        return {
+            "classification": classification,
+            "label": "Mean Reversion" if classification == "mean_reversion" else "Trend Following",
+            "description": info["description"],
+            "reasoning": info["reasoning"],
+            "confidence": "high",
+        }
+
+    # All other strategies
+    default_class = classification_info["default"]
+    label = "Mean Reversion" if default_class == "mean_reversion" else "Trend Following"
+    description = classification_info["description"]
+    reasoning = classification_info["reasoning"].get(default_class, "")
+
+    return {
+        "classification": default_class,
+        "label": label,
+        "description": description,
+        "reasoning": reasoning,
+        "confidence": "high",
+    }
+
+
+async def translate_hypothesis_llm(hypothesis: str) -> Optional[dict]:
+    """Use Claude API to translate plain English hypothesis to structured trading rules."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
+
+    prompt = f"""You are a quantitative trading strategy parser. Convert the following plain English trading hypothesis into a structured JSON format.
+
+Hypothesis: "{hypothesis}"
+
+Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
+{{
+    "strategy_type": "rsi|ma_crossover|bollinger|macd|breakout|custom",
+    "description": "Brief description of the strategy",
+    "entry_condition": "Human-readable entry condition",
+    "exit_condition": "Human-readable exit condition",
+    "indicators": [
+        {{"name": "indicator_name", "params": {{"period": 14, ...}}}}
+    ],
+    "parameters": {{
+        "entry_threshold": value,
+        "exit_threshold": value,
+        ... any other relevant parameters
+    }}
+}}
+
+Indicator names must be one of: rsi, sma, ema, bbands, macd, atr, stoch
+Parameter keys should be descriptive. Include all numeric thresholds from the hypothesis."""
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "max_tokens": 1024,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            if response.status_code == 200:
+                data = response.json()
+                text = data["content"][0]["text"].strip()
+                # Try to extract JSON if wrapped in code blocks
+                json_match = re.search(r'\{[\s\S]*\}', text)
+                if json_match:
+                    return json.loads(json_match.group())
+            return None
+    except Exception as e:
+        print(f"LLM translation failed: {e}")
+        return None
+
+
+def parse_hypothesis_fallback(hypothesis: str) -> dict:
+    """Rule-based parser for common trading strategy patterns."""
+    h = hypothesis.lower().strip()
+
+    # RSI strategies
+    rsi_match = re.search(r'rsi\s*(?:drops?\s*)?(?:below|under|<)\s*(\d+)', h)
+    rsi_exit = re.search(r'rsi\s*(?:crosses?\s*)?(?:above|over|>)\s*(\d+)', h)
+    rsi_sell_below = re.search(r'sell.*rsi\s*(?:drops?\s*)?(?:below|under|<)\s*(\d+)', h)
+    rsi_buy_above = re.search(r'buy.*rsi\s*(?:crosses?\s*)?(?:above|over|>)\s*(\d+)', h)
+
+    # Also check "when rsi is below X buy" pattern
+    if not rsi_match:
+        rsi_match = re.search(r'rsi\s*(?:is\s*)?(?:below|under|<)\s*(\d+).*buy', h)
+    if not rsi_exit:
+        rsi_exit = re.search(r'rsi\s*(?:is\s*)?(?:above|over|>)\s*(\d+).*sell', h)
+
+    if rsi_match or rsi_exit or rsi_sell_below or rsi_buy_above:
+        rsi_period_match = re.search(r'(\d+)\s*(?:period|day|bar)?\s*rsi', h)
+        rsi_period = int(rsi_period_match.group(1)) if rsi_period_match else 14
+        entry_val = int(rsi_match.group(1)) if rsi_match else 30
+        exit_val = int(rsi_exit.group(1)) if rsi_exit else 70
+
+        return {
+            "strategy_type": "rsi",
+            "description": f"RSI strategy: Buy when RSI < {entry_val}, Sell when RSI > {exit_val}",
+            "entry_condition": f"RSI({rsi_period}) crosses below {entry_val}",
+            "exit_condition": f"RSI({rsi_period}) crosses above {exit_val}",
+            "indicators": [{"name": "rsi", "params": {"period": rsi_period}}],
+            "parameters": {
+                "entry_threshold": entry_val,
+                "exit_threshold": exit_val,
+                "rsi_period": rsi_period,
+            },
+        }
+
+    # Moving Average Crossover
+    ma_cross = re.search(
+        r'(\d+)\s*(?:period|day|bar)?\s*(?:sma|ema|ma|moving\s*average).*(?:cross|above|over).*(\d+)\s*(?:period|day|bar)?\s*(?:sma|ema|ma|moving\s*average)',
+        h,
+    )
+    if not ma_cross:
+        ma_cross = re.search(
+            r'(?:sma|ema|ma)\s*\(?(\d+)\)?\s*(?:cross|above|over).*(?:sma|ema|ma)\s*\(?(\d+)\)?',
+            h,
+        )
+    # Also "short MA crosses above long MA" or "X day crosses Y day"
+    if not ma_cross:
+        ma_cross = re.search(r'(\d+)\s*(?:day|period).*cross.*(\d+)\s*(?:day|period)', h)
+
+    if ma_cross or 'moving average' in h or 'crossover' in h or ('ma ' in h and 'cross' in h) or ('ema' in h and 'cross' in h):
+        ma_type = "ema" if "ema" in h else "sma"
+        if ma_cross:
+            fast = int(ma_cross.group(1))
+            slow = int(ma_cross.group(2))
+            if fast > slow:
+                fast, slow = slow, fast
+        else:
+            fast, slow = 10, 50
+
+        return {
+            "strategy_type": "ma_crossover",
+            "description": f"{ma_type.upper()} Crossover: {fast}/{slow}",
+            "entry_condition": f"{ma_type.upper()}({fast}) crosses above {ma_type.upper()}({slow})",
+            "exit_condition": f"{ma_type.upper()}({fast}) crosses below {ma_type.upper()}({slow})",
+            "indicators": [
+                {"name": ma_type, "params": {"period": fast}},
+                {"name": ma_type, "params": {"period": slow}},
+            ],
+            "parameters": {
+                "fast_period": fast,
+                "slow_period": slow,
+                "ma_type": ma_type,
+            },
+        }
+
+    # Bollinger Band strategies
+    if 'bollinger' in h or 'bband' in h or 'bb ' in h:
+        bb_period_match = re.search(r'(\d+)\s*(?:period|day|bar)', h)
+        bb_period = int(bb_period_match.group(1)) if bb_period_match else 20
+        bb_std_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:std|deviation|sigma)', h)
+        bb_std = float(bb_std_match.group(1)) if bb_std_match else 2.0
+
+        # Determine if mean reversion or breakout
+        if 'lower' in h or ('below' in h and 'band' in h) or 'bounce' in h or 'revert' in h or 'mean' in h or 'touch' in h:
+            entry_cond = f"Price touches lower Bollinger Band ({bb_period}, {bb_std}σ)"
+            exit_cond = f"Price reaches middle Bollinger Band ({bb_period})"
+            bb_mode = "mean_reversion"
+        else:
+            entry_cond = f"Price breaks above upper Bollinger Band ({bb_period}, {bb_std}σ)"
+            exit_cond = f"Price falls below middle Bollinger Band ({bb_period})"
+            bb_mode = "breakout"
+
+        return {
+            "strategy_type": "bollinger",
+            "description": f"Bollinger Band {bb_mode}: {bb_period} period, {bb_std}σ",
+            "entry_condition": entry_cond,
+            "exit_condition": exit_cond,
+            "indicators": [{"name": "bbands", "params": {"period": bb_period, "std": bb_std}}],
+            "parameters": {
+                "bb_period": bb_period,
+                "bb_std": bb_std,
+                "mode": bb_mode,
+            },
+        }
+
+    # MACD strategies
+    if 'macd' in h:
+        fast_match = re.search(r'fast\s*(?:period)?\s*(\d+)', h)
+        slow_match = re.search(r'slow\s*(?:period)?\s*(\d+)', h)
+        signal_match = re.search(r'signal\s*(?:period)?\s*(\d+)', h)
+        fast_p = int(fast_match.group(1)) if fast_match else 12
+        slow_p = int(slow_match.group(1)) if slow_match else 26
+        signal_p = int(signal_match.group(1)) if signal_match else 9
+
+        return {
+            "strategy_type": "macd",
+            "description": f"MACD Crossover: {fast_p}/{slow_p}/{signal_p}",
+            "entry_condition": f"MACD line crosses above signal line",
+            "exit_condition": f"MACD line crosses below signal line",
+            "indicators": [
+                {"name": "macd", "params": {"fast": fast_p, "slow": slow_p, "signal": signal_p}}
+            ],
+            "parameters": {
+                "fast_period": fast_p,
+                "slow_period": slow_p,
+                "signal_period": signal_p,
+            },
+        }
+
+    # Price breakout strategies
+    if 'breakout' in h or 'break above' in h or 'break below' in h or 'high' in h:
+        period_match = re.search(r'(\d+)\s*(?:period|day|bar|candle)', h)
+        period = int(period_match.group(1)) if period_match else 20
+
+        return {
+            "strategy_type": "breakout",
+            "description": f"Price Breakout: {period}-period high/low",
+            "entry_condition": f"Price breaks above {period}-period high",
+            "exit_condition": f"Price breaks below {period}-period low",
+            "indicators": [],
+            "parameters": {
+                "breakout_period": period,
+            },
+        }
+
+    # Default: RSI with standard params
+    return {
+        "strategy_type": "rsi",
+        "description": "Default RSI strategy (couldn't parse specific rules)",
+        "entry_condition": "RSI(14) crosses below 30",
+        "exit_condition": "RSI(14) crosses above 70",
+        "indicators": [{"name": "rsi", "params": {"period": 14}}],
+        "parameters": {
+            "entry_threshold": 30,
+            "exit_threshold": 70,
+            "rsi_period": 14,
+        },
+    }
+
+
+async def translate_hypothesis(hypothesis: str) -> dict:
+    """Main entry point: try LLM first, fall back to rule-based parser."""
+    result = await translate_hypothesis_llm(hypothesis)
+    if result:
+        return result
+    return parse_hypothesis_fallback(hypothesis)
