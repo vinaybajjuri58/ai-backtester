@@ -130,8 +130,16 @@ pip install -r requirements.txt
 
 ### Environment Variables
 
+Create a `.env` file in the `backend/` folder (recommended):
+
 ```bash
-# LLM Providers (at least one recommended for best results)
+# backend/.env
+ANTHROPIC_API_KEY=your-anthropic-key
+MOONSHOT_API_KEY=your-moonshot-key
+```
+
+Or export them manually:
+```bash
 export ANTHROPIC_API_KEY="your-api-key"    # For Claude
 export MOONSHOT_API_KEY="your-api-key"     # For Kimi K2.5 (Moonshot AI)
 ```
