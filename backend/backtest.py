@@ -515,17 +515,29 @@ def run_walk_forward(df_original: pd.DataFrame, rules: dict, split_ratio: float 
             "out_of_sample": {"total_return": 0, "sharpe_ratio": 0, "win_rate": 0, "max_drawdown": 0, "total_trades": 0},
             "robustness_score": 0,
         }
-
+    
+    # Check if SL/TP mode
+    params = rules.get("parameters", {})
+    sl_pct = params.get("sl_pct")
+    tp_pct = params.get("tp_pct")
+    use_sl_tp = sl_pct is not None and tp_pct is not None
+    
     # In-sample
     df_is = df_original.iloc[:split_idx].copy()
     df_is = generate_signals(df_is, rules)
-    df_is, trades_is = run_backtest(df_is)
+    if use_sl_tp:
+        df_is, trades_is = run_backtest_with_sl_tp(df_is, sl_pct=sl_pct, tp_pct=tp_pct)
+    else:
+        df_is, trades_is = run_backtest(df_is)
     metrics_is = calculate_metrics(df_is, trades_is)
 
     # Out-of-sample
     df_oos = df_original.iloc[split_idx:].copy()
     df_oos = generate_signals(df_oos, rules)
-    df_oos, trades_oos = run_backtest(df_oos)
+    if use_sl_tp:
+        df_oos, trades_oos = run_backtest_with_sl_tp(df_oos, sl_pct=sl_pct, tp_pct=tp_pct)
+    else:
+        df_oos, trades_oos = run_backtest(df_oos)
     metrics_oos = calculate_metrics(df_oos, trades_oos)
 
     # Robustness score (ratio of OOS to IS performance)
@@ -568,15 +580,18 @@ async def execute_backtest(hypothesis: str, asset: str, timeframe: str, lookback
     # 3. Generate signals
     df = generate_signals(df, rules)
 
-    # 4. Run backtest (use SL/TP for confluence strategies)
+    # 4. Run backtest (use SL/TP if sl_pct and tp_pct are specified)
     strategy_type = rules.get("strategy_type", "rsi")
     params = rules.get("parameters", {})
     
-    if strategy_type == "confluence_rsi_ema":
-        sl_pct = params.get("sl_pct", 0.01)
-        tp_pct = params.get("tp_pct", 0.02)
+    sl_pct = params.get("sl_pct")
+    tp_pct = params.get("tp_pct")
+    
+    if sl_pct is not None and tp_pct is not None:
+        # Use bar-by-bar SL/TP backtest
         df, trades = run_backtest_with_sl_tp(df, sl_pct=sl_pct, tp_pct=tp_pct)
     else:
+        # Use standard vectorized backtest
         df, trades = run_backtest(df)
 
     # 5. Calculate metrics

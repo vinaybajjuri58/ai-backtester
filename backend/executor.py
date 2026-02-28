@@ -1,10 +1,15 @@
 """Code Generation - Generates standalone Python backtest code from trading rules."""
 
 
-def generate_backtest_logic(strategy_type: str) -> str:
-    """Generate the appropriate backtest logic based on strategy type."""
+def generate_backtest_logic(strategy_type: str, use_sl_tp: bool = False) -> str:
+    """Generate the appropriate backtest logic based on strategy type.
     
-    if strategy_type == "confluence_rsi_ema":
+    Args:
+        strategy_type: The type of strategy
+        use_sl_tp: If True, use bar-by-bar SL/TP backtest regardless of strategy type
+    """
+    
+    if use_sl_tp or strategy_type == "confluence_rsi_ema":
         # SL/TP backtest logic for confluence with entry/exit times
         return '''# Bar-by-bar backtest with Stop Loss and Take Profit
 # Entry: at close of signal bar
@@ -179,8 +184,15 @@ from datetime import datetime, timedelta
         code += f'RSI_ENTRY = {params.get("rsi_entry_threshold", 30)}\n'
         code += f'FAST_EMA = {params.get("fast_period", 10)}\n'
         code += f'SLOW_EMA = {params.get("slow_period", 50)}\n'
-        code += f'SL_PCT = {params.get("sl_pct", 0.01)}\n'
-        code += f'TP_PCT = {params.get("tp_pct", 0.02)}\n'
+    
+    # Add SL/TP config if specified (works with any strategy)
+    sl_pct = params.get("sl_pct")
+    tp_pct = params.get("tp_pct")
+    if sl_pct is not None:
+        code += f'SL_PCT = {sl_pct}\n'
+    if tp_pct is not None:
+        code += f'TP_PCT = {tp_pct}\n'
+    use_sl_tp = sl_pct is not None and tp_pct is not None
 
     code += '''
 # ============================================================
@@ -286,7 +298,7 @@ df.loc[~df["confluence_long"], "signal"] = -1
 # 5. Run Backtest
 # ============================================================
 
-''' + generate_backtest_logic(strategy_type) + '''
+''' + generate_backtest_logic(strategy_type, use_sl_tp=use_sl_tp) + '''
 
 # ============================================================
 # 6. Calculate Metrics

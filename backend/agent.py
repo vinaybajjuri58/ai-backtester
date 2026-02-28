@@ -32,12 +32,19 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
     "parameters": {{
         "entry_threshold": value,
         "exit_threshold": value,
+        "sl_pct": 0.01,        // Optional: Stop loss percentage (e.g., 0.01 = 1%)
+        "tp_pct": 0.02,        // Optional: Take profit percentage (e.g., 0.02 = 2%)
         ... any other relevant parameters
     }}
 }}
 
 Indicator names must be one of: rsi, sma, ema, bbands, macd, atr, stoch
-Parameter keys should be descriptive. Include all numeric thresholds from the hypothesis."""
+Parameter keys should be descriptive. Include all numeric thresholds from the hypothesis.
+
+IMPORTANT: If the user mentions stop loss (SL) or take profit (TP) percentages, include them as sl_pct and tp_pct in parameters.
+Examples:
+- "stop loss 1%" → "sl_pct": 0.01
+- "take profit 3%" → "tp_pct": 0.03"""
 
 
 # ─── Strategy Classification ───────────────────────────────────────
@@ -293,9 +300,47 @@ async def translate_hypothesis_kimi(hypothesis: str) -> Optional[dict]:
         return None
 
 
+def _extract_sl_tp(hypothesis: str) -> tuple[float, float]:
+    """Extract SL and TP percentages from hypothesis text.
+    Returns (sl_pct, tp_pct) - defaults to (None, None) if not specified.
+    """
+    h = hypothesis.lower()
+    
+    # Try various SL patterns
+    sl_patterns = [
+        r'stop\s*loss\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*%',
+        r'sl\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*%',
+        r'sl\s*(\d+(?:\.\d+)?)\s*%',
+    ]
+    sl_pct = None
+    for pattern in sl_patterns:
+        match = re.search(pattern, h)
+        if match:
+            sl_pct = float(match.group(1)) / 100
+            break
+    
+    # Try various TP patterns
+    tp_patterns = [
+        r'take\s*profit\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*%',
+        r'tp\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*%',
+        r'tp\s*(\d+(?:\.\d+)?)\s*%',
+    ]
+    tp_pct = None
+    for pattern in tp_patterns:
+        match = re.search(pattern, h)
+        if match:
+            tp_pct = float(match.group(1)) / 100
+            break
+    
+    return sl_pct, tp_pct
+
+
 def parse_hypothesis_fallback(hypothesis: str) -> dict:
     """Rule-based parser for common trading strategy patterns."""
     h = hypothesis.lower().strip()
+    
+    # Check for SL/TP in any hypothesis
+    sl_pct, tp_pct = _extract_sl_tp(hypothesis)
 
     # Confluence: RSI + EMA
     if ('confluence' in h or ('rsi' in h and 'ema' in h)) and ('both' in h or 'and' in h):
@@ -321,11 +366,11 @@ def parse_hypothesis_fallback(hypothesis: str) -> dict:
         tp_match = re.search(r'take\s*profit\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*%', h)
         tp_pct = float(tp_match.group(1)) / 100 if tp_match else 0.02
         
-        return {
+        result = {
             "strategy_type": "confluence_rsi_ema",
-            "description": f"RSI({rsi_period}) < {rsi_threshold} + EMA({fast_ema}) > EMA({slow_ema}) confluence with SL {sl_pct*100:.0f}% / TP {tp_pct*100:.0f}%",
+            "description": f"RSI({rsi_period}) < {rsi_threshold} + EMA({fast_ema}) > EMA({slow_ema}) confluence" + (f" with SL {sl_pct*100:.1f}% / TP {tp_pct*100:.1f}%" if sl_pct and tp_pct else ""),
             "entry_condition": f"RSI({rsi_period}) < {rsi_threshold} AND EMA({fast_ema}) > EMA({slow_ema})",
-            "exit_condition": f"Stop Loss {sl_pct*100:.0f}% OR Take Profit {tp_pct*100:.0f}%",
+            "exit_condition": f"Stop Loss {sl_pct*100:.1f}% OR Take Profit {tp_pct*100:.1f}%" if (sl_pct and tp_pct) else "Signal change",
             "indicators": [
                 {"name": "rsi", "params": {"period": rsi_period}},
                 {"name": "ema", "params": {"period": fast_ema}},
@@ -336,10 +381,13 @@ def parse_hypothesis_fallback(hypothesis: str) -> dict:
                 "rsi_entry_threshold": rsi_threshold,
                 "fast_period": fast_ema,
                 "slow_period": slow_ema,
-                "sl_pct": sl_pct,
-                "tp_pct": tp_pct,
             },
         }
+        if sl_pct:
+            result["parameters"]["sl_pct"] = sl_pct
+        if tp_pct:
+            result["parameters"]["tp_pct"] = tp_pct
+        return result
 
     # RSI strategies
     rsi_match = re.search(r'rsi\s*(?:drops?\s*)?(?:below|under|<)\s*(\d+)', h)
@@ -359,11 +407,11 @@ def parse_hypothesis_fallback(hypothesis: str) -> dict:
         entry_val = int(rsi_match.group(1)) if rsi_match else 30
         exit_val = int(rsi_exit.group(1)) if rsi_exit else 70
 
-        return {
+        result = {
             "strategy_type": "rsi",
-            "description": f"RSI strategy: Buy when RSI < {entry_val}, Sell when RSI > {exit_val}",
+            "description": f"RSI strategy: Buy when RSI < {entry_val}, Sell when RSI > {exit_val}" + (f" with SL {sl_pct*100:.1f}% / TP {tp_pct*100:.1f}%" if sl_pct and tp_pct else ""),
             "entry_condition": f"RSI({rsi_period}) crosses below {entry_val}",
-            "exit_condition": f"RSI({rsi_period}) crosses above {exit_val}",
+            "exit_condition": f"Stop Loss {sl_pct*100:.1f}% OR Take Profit {tp_pct*100:.1f}%" if (sl_pct and tp_pct) else f"RSI({rsi_period}) crosses above {exit_val}",
             "indicators": [{"name": "rsi", "params": {"period": rsi_period}}],
             "parameters": {
                 "entry_threshold": entry_val,
@@ -371,6 +419,11 @@ def parse_hypothesis_fallback(hypothesis: str) -> dict:
                 "rsi_period": rsi_period,
             },
         }
+        if sl_pct:
+            result["parameters"]["sl_pct"] = sl_pct
+        if tp_pct:
+            result["parameters"]["tp_pct"] = tp_pct
+        return result
 
     # Moving Average Crossover
     ma_cross = re.search(
@@ -396,11 +449,11 @@ def parse_hypothesis_fallback(hypothesis: str) -> dict:
         else:
             fast, slow = 10, 50
 
-        return {
+        result = {
             "strategy_type": "ma_crossover",
-            "description": f"{ma_type.upper()} Crossover: {fast}/{slow}",
+            "description": f"{ma_type.upper()} Crossover: {fast}/{slow}" + (f" with SL {sl_pct*100:.1f}% / TP {tp_pct*100:.1f}%" if sl_pct and tp_pct else ""),
             "entry_condition": f"{ma_type.upper()}({fast}) crosses above {ma_type.upper()}({slow})",
-            "exit_condition": f"{ma_type.upper()}({fast}) crosses below {ma_type.upper()}({slow})",
+            "exit_condition": f"Stop Loss {sl_pct*100:.1f}% OR Take Profit {tp_pct*100:.1f}%" if (sl_pct and tp_pct) else f"{ma_type.upper()}({fast}) crosses below {ma_type.upper()}({slow})",
             "indicators": [
                 {"name": ma_type, "params": {"period": fast}},
                 {"name": ma_type, "params": {"period": slow}},
@@ -411,6 +464,11 @@ def parse_hypothesis_fallback(hypothesis: str) -> dict:
                 "ma_type": ma_type,
             },
         }
+        if sl_pct:
+            result["parameters"]["sl_pct"] = sl_pct
+        if tp_pct:
+            result["parameters"]["tp_pct"] = tp_pct
+        return result
 
     # Bollinger Band strategies
     if 'bollinger' in h or 'bband' in h or 'bb ' in h:
@@ -429,11 +487,11 @@ def parse_hypothesis_fallback(hypothesis: str) -> dict:
             exit_cond = f"Price falls below middle Bollinger Band ({bb_period})"
             bb_mode = "breakout"
 
-        return {
+        result = {
             "strategy_type": "bollinger",
-            "description": f"Bollinger Band {bb_mode}: {bb_period} period, {bb_std}σ",
+            "description": f"Bollinger Band {bb_mode}: {bb_period} period, {bb_std}σ" + (f" with SL {sl_pct*100:.1f}% / TP {tp_pct*100:.1f}%" if sl_pct and tp_pct else ""),
             "entry_condition": entry_cond,
-            "exit_condition": exit_cond,
+            "exit_condition": f"Stop Loss {sl_pct*100:.1f}% OR Take Profit {tp_pct*100:.1f}%" if (sl_pct and tp_pct) else exit_cond,
             "indicators": [{"name": "bbands", "params": {"period": bb_period, "std": bb_std}}],
             "parameters": {
                 "bb_period": bb_period,
@@ -441,6 +499,11 @@ def parse_hypothesis_fallback(hypothesis: str) -> dict:
                 "mode": bb_mode,
             },
         }
+        if sl_pct:
+            result["parameters"]["sl_pct"] = sl_pct
+        if tp_pct:
+            result["parameters"]["tp_pct"] = tp_pct
+        return result
 
     # MACD strategies
     if 'macd' in h:
@@ -451,11 +514,11 @@ def parse_hypothesis_fallback(hypothesis: str) -> dict:
         slow_p = int(slow_match.group(1)) if slow_match else 26
         signal_p = int(signal_match.group(1)) if signal_match else 9
 
-        return {
+        result = {
             "strategy_type": "macd",
-            "description": f"MACD Crossover: {fast_p}/{slow_p}/{signal_p}",
+            "description": f"MACD Crossover: {fast_p}/{slow_p}/{signal_p}" + (f" with SL {sl_pct*100:.1f}% / TP {tp_pct*100:.1f}%" if sl_pct and tp_pct else ""),
             "entry_condition": f"MACD line crosses above signal line",
-            "exit_condition": f"MACD line crosses below signal line",
+            "exit_condition": f"Stop Loss {sl_pct*100:.1f}% OR Take Profit {tp_pct*100:.1f}%" if (sl_pct and tp_pct) else f"MACD line crosses below signal line",
             "indicators": [
                 {"name": "macd", "params": {"fast": fast_p, "slow": slow_p, "signal": signal_p}}
             ],
@@ -465,29 +528,39 @@ def parse_hypothesis_fallback(hypothesis: str) -> dict:
                 "signal_period": signal_p,
             },
         }
+        if sl_pct:
+            result["parameters"]["sl_pct"] = sl_pct
+        if tp_pct:
+            result["parameters"]["tp_pct"] = tp_pct
+        return result
 
     # Price breakout strategies
     if 'breakout' in h or 'break above' in h or 'break below' in h or 'high' in h:
         period_match = re.search(r'(\d+)\s*(?:period|day|bar|candle)', h)
         period = int(period_match.group(1)) if period_match else 20
 
-        return {
+        result = {
             "strategy_type": "breakout",
-            "description": f"Price Breakout: {period}-period high/low",
+            "description": f"Price Breakout: {period}-period high/low" + (f" with SL {sl_pct*100:.1f}% / TP {tp_pct*100:.1f}%" if sl_pct and tp_pct else ""),
             "entry_condition": f"Price breaks above {period}-period high",
-            "exit_condition": f"Price breaks below {period}-period low",
+            "exit_condition": f"Stop Loss {sl_pct*100:.1f}% OR Take Profit {tp_pct*100:.1f}%" if (sl_pct and tp_pct) else f"Price breaks below {period}-period low",
             "indicators": [],
             "parameters": {
                 "breakout_period": period,
             },
         }
+        if sl_pct:
+            result["parameters"]["sl_pct"] = sl_pct
+        if tp_pct:
+            result["parameters"]["tp_pct"] = tp_pct
+        return result
 
     # Default: RSI with standard params
-    return {
+    result = {
         "strategy_type": "rsi",
-        "description": "Default RSI strategy (couldn't parse specific rules)",
+        "description": "Default RSI strategy (couldn't parse specific rules)" + (f" with SL {sl_pct*100:.1f}% / TP {tp_pct*100:.1f}%" if sl_pct and tp_pct else ""),
         "entry_condition": "RSI(14) crosses below 30",
-        "exit_condition": "RSI(14) crosses above 70",
+        "exit_condition": f"Stop Loss {sl_pct*100:.1f}% OR Take Profit {tp_pct*100:.1f}%" if (sl_pct and tp_pct) else "RSI(14) crosses above 70",
         "indicators": [{"name": "rsi", "params": {"period": 14}}],
         "parameters": {
             "entry_threshold": 30,
@@ -495,6 +568,11 @@ def parse_hypothesis_fallback(hypothesis: str) -> dict:
             "rsi_period": 14,
         },
     }
+    if sl_pct:
+        result["parameters"]["sl_pct"] = sl_pct
+    if tp_pct:
+        result["parameters"]["tp_pct"] = tp_pct
+    return result
 
 
 async def translate_hypothesis_llm(hypothesis: str) -> Optional[dict]:
