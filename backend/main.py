@@ -1,7 +1,17 @@
 """FastAPI application for AI Backtester."""
 
+import os
 from dotenv import load_dotenv
-load_dotenv()  # Load environment variables from .env file
+
+# Load .env from backend folder or project root
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.dirname(backend_dir)
+
+# Try backend/.env first, then root .env
+for env_path in [os.path.join(backend_dir, ".env"), os.path.join(root_dir, ".env")]:
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+        break
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware

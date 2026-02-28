@@ -130,17 +130,29 @@ pip install -r requirements.txt
 
 ### Environment Variables
 
-Create a `.env` file in the `backend/` folder (recommended):
+Create a `.env` file in either the **project root** or the **backend folder**:
 
 ```bash
-# backend/.env
+# Option A: Project root (recommended) - ai-backtester/.env
+OPENAI_API_KEY=sk-proj-...
 
+# Option B: Backend folder - ai-backtester/backend/.env
+OPENAI_API_KEY=sk-proj-...
+```
+
+Both locations work. The backend checks for `.env` in this order:
+1. `backend/.env`
+2. `ai-backtester/.env` (project root)
+
+**Example `.env` content:**
+
+```bash
 # Option 1: Anthropic Claude (tried first)
 ANTHROPIC_API_KEY=sk-ant-api03-...
 
-# Option 2: OpenAI (tried second)
+# Option 2: OpenAI (tried second) - RECOMMENDED
 OPENAI_API_KEY=sk-proj-...
-# OPENAI_MODEL=gpt-4o-mini  # optional, defaults to gpt-4o-mini
+# OPENAI_MODEL=gpt-4o-mini  # optional
 
 # Option 3: Kimi K2.5 via Moonshot (tried third)
 MOONSHOT_API_KEY=sk-...
