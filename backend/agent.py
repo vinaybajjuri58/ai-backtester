@@ -175,6 +175,52 @@ async def translate_hypothesis_claude(hypothesis: str) -> Optional[dict]:
         return None
 
 
+async def translate_hypothesis_openai(hypothesis: str) -> Optional[dict]:
+    """Use OpenAI API to translate hypothesis to structured trading rules.
+    
+    Env vars:
+    - OPENAI_API_KEY (required)
+    - OPENAI_MODEL (optional, defaults to gpt-4o-mini)
+    - OPENAI_BASE_URL (optional, for Azure or proxies)
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return None
+
+    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    if not base_url.endswith("/chat/completions"):
+        base_url = base_url.rstrip("/") + "/chat/completions"
+    
+    model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    prompt = LLM_PROMPT_TEMPLATE.format(hypothesis=hypothesis)
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                base_url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "max_tokens": 1024,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            if response.status_code == 200:
+                data = response.json()
+                text = data["choices"][0]["message"]["content"].strip()
+                return _extract_json_from_text(text)
+            else:
+                print(f"OpenAI API error: {response.status_code} - {response.text}")
+                print(f"  Model: {model}")
+            return None
+    except Exception as e:
+        print(f"OpenAI translation failed: {e}")
+        return None
+
+
 async def translate_hypothesis_kimi(hypothesis: str) -> Optional[dict]:
     """Use Kimi K2.5 API to translate hypothesis to structured trading rules.
     
@@ -401,7 +447,7 @@ def parse_hypothesis_fallback(hypothesis: str) -> dict:
 
 
 async def translate_hypothesis_llm(hypothesis: str) -> Optional[dict]:
-    """Try LLM providers in order: Claude -> Kimi.
+    """Try LLM providers in order: Claude -> OpenAI -> Kimi.
     
     Returns the first successful result, or None if all fail.
     """
@@ -409,6 +455,12 @@ async def translate_hypothesis_llm(hypothesis: str) -> Optional[dict]:
     result = await translate_hypothesis_claude(hypothesis)
     if result:
         print("Using Claude for strategy translation")
+        return result
+    
+    # Try OpenAI
+    result = await translate_hypothesis_openai(hypothesis)
+    if result:
+        print("Using OpenAI for strategy translation")
         return result
     
     # Fall back to Kimi K2.5

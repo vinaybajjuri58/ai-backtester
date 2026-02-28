@@ -138,10 +138,14 @@ Create a `.env` file in the `backend/` folder (recommended):
 # Option 1: Anthropic Claude (tried first)
 ANTHROPIC_API_KEY=sk-ant-api03-...
 
-# Option 2: Kimi K2.5 via Moonshot (tried second)
+# Option 2: OpenAI (tried second)
+OPENAI_API_KEY=sk-proj-...
+# OPENAI_MODEL=gpt-4o-mini  # optional, defaults to gpt-4o-mini
+
+# Option 3: Kimi K2.5 via Moonshot (tried third)
 MOONSHOT_API_KEY=sk-...
 
-# Option 3: Kimi via OpenRouter or other proxy
+# Option 4: Kimi via OpenRouter or other proxy
 KIMI_API_KEY=sk-or-v1-...
 KIMI_BASE_URL=https://openrouter.ai/api/v1
 KIMI_MODEL=moonshotai/kimi-k2.5
@@ -149,8 +153,9 @@ KIMI_MODEL=moonshotai/kimi-k2.5
 
 **LLM Priority:**
 1. Claude (Anthropic) - tried first if `ANTHROPIC_API_KEY` is set
-2. Kimi K2.5 - tried second if any Kimi key is set (`KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `OPENROUTER_API_KEY`)
-3. Rule-based parser - always available as fallback
+2. OpenAI - tried second if `OPENAI_API_KEY` is set
+3. Kimi K2.5 - tried third if any Kimi key is set (`KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `OPENROUTER_API_KEY`)
+4. Rule-based parser - always available as fallback
 
 **Kimi Configuration Options:**
 
@@ -163,6 +168,12 @@ KIMI_MODEL=moonshotai/kimi-k2.5
 **Common Setups:**
 
 ```bash
+# OpenAI (Default - recommended)
+OPENAI_API_KEY=sk-proj-...
+
+# Anthropic Claude
+ANTHROPIC_API_KEY=sk-ant-api03-...
+
 # Direct Moonshot (China)
 MOONSHOT_API_KEY=your-moonshot-key
 
