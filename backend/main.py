@@ -68,6 +68,7 @@ async def run_backtest(request: BacktestRequest):
             generated_code=code,
             strategy_rules=rules,
             classification=classification,
+            last_3_trades=results["last_3_trades"],
         )
 
     except ValueError as e:
