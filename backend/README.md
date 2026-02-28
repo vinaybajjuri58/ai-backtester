@@ -134,20 +134,47 @@ Create a `.env` file in the `backend/` folder (recommended):
 
 ```bash
 # backend/.env
-ANTHROPIC_API_KEY=your-anthropic-key
-MOONSHOT_API_KEY=your-moonshot-key
-```
 
-Or export them manually:
-```bash
-export ANTHROPIC_API_KEY="your-api-key"    # For Claude
-export MOONSHOT_API_KEY="your-api-key"     # For Kimi K2.5 (Moonshot AI)
+# Option 1: Anthropic Claude (tried first)
+ANTHROPIC_API_KEY=sk-ant-api03-...
+
+# Option 2: Kimi K2.5 via Moonshot (tried second)
+MOONSHOT_API_KEY=sk-...
+
+# Option 3: Kimi via OpenRouter or other proxy
+KIMI_API_KEY=sk-or-v1-...
+KIMI_BASE_URL=https://openrouter.ai/api/v1
+KIMI_MODEL=moonshotai/kimi-k2.5
 ```
 
 **LLM Priority:**
 1. Claude (Anthropic) - tried first if `ANTHROPIC_API_KEY` is set
-2. Kimi K2.5 (Moonshot AI) - tried second if `MOONSHOT_API_KEY` is set
+2. Kimi K2.5 - tried second if any Kimi key is set (`KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `OPENROUTER_API_KEY`)
 3. Rule-based parser - always available as fallback
+
+**Kimi Configuration Options:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KIMI_API_KEY` / `MOONSHOT_API_KEY` / `OPENROUTER_API_KEY` | - | API key (tried in that order) |
+| `KIMI_BASE_URL` | `https://api.moonshot.cn/v1` | API base URL |
+| `KIMI_MODEL` | `kimi-k2.5` | Model name |
+
+**Common Setups:**
+
+```bash
+# Direct Moonshot (China)
+MOONSHOT_API_KEY=your-moonshot-key
+
+# OpenRouter (Global)
+KIMI_API_KEY=sk-or-v1-...
+KIMI_BASE_URL=https://openrouter.ai/api/v1
+KIMI_MODEL=moonshotai/kimi-k2.5
+
+# Custom proxy
+KIMI_API_KEY=your-key
+KIMI_BASE_URL=https://your-proxy.com/v1
+```
 
 Without any API keys, the system uses the rule-based regex parser.
 

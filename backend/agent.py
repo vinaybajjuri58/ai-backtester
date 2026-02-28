@@ -176,26 +176,52 @@ async def translate_hypothesis_claude(hypothesis: str) -> Optional[dict]:
 
 
 async def translate_hypothesis_kimi(hypothesis: str) -> Optional[dict]:
-    """Use Moonshot AI Kimi K2.5 API to translate hypothesis to structured trading rules.
+    """Use Kimi K2.5 API to translate hypothesis to structured trading rules.
     
-    Kimi API is OpenAI-compatible. Requires MOONSHOT_API_KEY environment variable.
+    Supports:
+    - Direct Moonshot API (api.moonshot.cn)
+    - OpenRouter (openrouter.ai) and other OpenAI-compatible proxies
+    
+    Env vars:
+    - KIMI_API_KEY or MOONSHOT_API_KEY or OPENROUTER_API_KEY
+    - KIMI_BASE_URL (optional, defaults to Moonshot)
+    - KIMI_MODEL (optional, defaults to kimi-k2.5)
     """
-    api_key = os.environ.get("MOONSHOT_API_KEY")
+    # Try different API key env vars
+    api_key = (
+        os.environ.get("KIMI_API_KEY") or 
+        os.environ.get("MOONSHOT_API_KEY") or 
+        os.environ.get("OPENROUTER_API_KEY")
+    )
     if not api_key:
         return None
 
+    # Get base URL (support OpenRouter and other proxies)
+    base_url = os.environ.get("KIMI_BASE_URL", "https://api.moonshot.cn/v1")
+    if not base_url.endswith("/chat/completions"):
+        base_url = base_url.rstrip("/") + "/chat/completions"
+    
+    # Get model name
+    model = os.environ.get("KIMI_MODEL", "kimi-k2.5")
+    
     prompt = LLM_PROMPT_TEMPLATE.format(hypothesis=hypothesis)
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            # OpenRouter requires extra headers
+            if "openrouter" in base_url:
+                headers["HTTP-Referer"] = os.environ.get("APP_URL", "http://localhost:8000")
+                headers["X-Title"] = "AI Backtester"
+            
             response = await client.post(
-                "https://api.moonshot.cn/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
+                base_url,
+                headers=headers,
                 json={
-                    "model": "kimi-k2.5",
+                    "model": model,
                     "max_tokens": 1024,
                     "messages": [{"role": "user", "content": prompt}],
                 },
@@ -206,6 +232,8 @@ async def translate_hypothesis_kimi(hypothesis: str) -> Optional[dict]:
                 return _extract_json_from_text(text)
             else:
                 print(f"Kimi API error: {response.status_code} - {response.text}")
+                print(f"  Base URL: {base_url}")
+                print(f"  Model: {model}")
             return None
     except Exception as e:
         print(f"Kimi translation failed: {e}")
