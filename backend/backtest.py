@@ -102,6 +102,16 @@ def calculate_indicators(df: pd.DataFrame, rules: dict) -> pd.DataFrame:
         period = params.get("rsi_period", 14)
         df["rsi"] = ta.rsi(df["close"], length=period)
 
+    elif strategy_type == "confluence_rsi_ema":
+        # RSI for mean-reversion entry
+        rsi_period = params.get("rsi_period", 14)
+        df["rsi"] = ta.rsi(df["close"], length=rsi_period)
+        # EMAs for trend confirmation
+        fast_period = params.get("fast_period", 10)
+        slow_period = params.get("slow_period", 50)
+        df["fast_ema"] = ta.ema(df["close"], length=fast_period)
+        df["slow_ema"] = ta.ema(df["close"], length=slow_period)
+
     elif strategy_type == "ma_crossover":
         fast = params.get("fast_period", 10)
         slow = params.get("slow_period", 50)
@@ -152,6 +162,15 @@ def generate_signals(df: pd.DataFrame, rules: dict) -> pd.DataFrame:
         exit_val = params.get("exit_threshold", 70)
         df.loc[df["rsi"] < entry, "signal"] = 1
         df.loc[df["rsi"] > exit_val, "signal"] = -1
+
+    elif strategy_type == "confluence_rsi_ema":
+        # Confluence: RSI oversold + EMA uptrend
+        rsi_entry = params.get("rsi_entry_threshold", 30)
+        df["confluence_long"] = (df["rsi"] < rsi_entry) & (df["fast_ema"] > df["slow_ema"])
+        # Signal = 1 when confluence condition is met
+        df.loc[df["confluence_long"], "signal"] = 1
+        # Exit signal (optional - not used with SL/TP)
+        df.loc[~df["confluence_long"], "signal"] = -1
 
     elif strategy_type == "ma_crossover":
         df.loc[df["fast_ma"] > df["slow_ma"], "signal"] = 1
@@ -218,6 +237,132 @@ def run_backtest(df: pd.DataFrame) -> Tuple[pd.DataFrame, list]:
             })
             in_trade = False
 
+    return df, trades
+
+
+def run_backtest_with_sl_tp(df: pd.DataFrame, sl_pct: float = 0.01, tp_pct: float = 0.02) -> Tuple[pd.DataFrame, list]:
+    """Run bar-by-bar backtest with Stop Loss and Take Profit exits.
+    
+    Final SL/TP rules (Long-only):
+    - Entry: When confluence condition becomes true, enter at that bar's close
+      entry_price = close[i], entry_time = index[i]
+    - SL/TP levels: sl_price = entry_price * (1 - sl_pct), tp_price = entry_price * (1 + tp_pct)
+    - Exit check: Start from i+1 (next bar) to avoid "enter and exit on same candle" artifacts
+    - SL hit if low[j] <= sl_price
+    - TP hit if high[j] >= tp_price
+    - If both hit in same bar: SL takes precedence (conservative)
+    
+    Args:
+        df: DataFrame with 'signal', 'open', 'high', 'low', 'close' columns
+        sl_pct: Stop loss percentage (e.g., 0.01 = 1%)
+        tp_pct: Take profit percentage (e.g., 0.02 = 2%)
+    
+    Returns:
+        Tuple of (DataFrame with equity curve, list of trades)
+    """
+    df = df.copy()
+    initial_capital = 10000
+    
+    trades = []
+    position = 0  # 0 = flat, 1 = long
+    entry_price = 0.0
+    entry_idx = None
+    entry_time = None
+    sl_price = 0.0
+    tp_price = 0.0
+    
+    equity = [initial_capital]
+    position_series = [0]
+    
+    for i in range(1, len(df)):
+        current_bar = df.iloc[i]
+        current_time = df.index[i]
+        prev_equity = equity[-1]
+        
+        if position == 0:
+            # Not in position - check for entry signal
+            if current_bar["signal"] == 1:
+                # Enter long at close of signal bar
+                position = 1
+                entry_price = float(current_bar["close"])
+                entry_idx = i
+                entry_time = current_time
+                sl_price = entry_price * (1 - sl_pct)
+                tp_price = entry_price * (1 + tp_pct)
+                # Don't check SL/TP on entry bar - wait for next bar
+        else:
+            # In position - check for SL/TP exit (evaluating current bar)
+            bar_high = float(current_bar["high"])
+            bar_low = float(current_bar["low"])
+            bar_close = float(current_bar["close"])
+            
+            sl_hit = bar_low <= sl_price
+            tp_hit = bar_high >= tp_price
+            
+            exit_price = None
+            exit_reason = None
+            
+            if sl_hit and tp_hit:
+                # Both hit in same bar - SL takes precedence (conservative)
+                exit_price = sl_price
+                exit_reason = "SL_same_bar"
+            elif sl_hit:
+                exit_price = sl_price
+                exit_reason = "SL"
+            elif tp_hit:
+                exit_price = tp_price
+                exit_reason = "TP"
+            
+            if exit_price is not None:
+                # Close the trade
+                pnl_pct = (exit_price - entry_price) / entry_price
+                trades.append({
+                    "entry_idx": entry_idx,
+                    "exit_idx": i,
+                    "entry_time": entry_time.strftime("%Y-%m-%d %H:%M") if hasattr(entry_time, 'strftime') else str(entry_time),
+                    "exit_time": current_time.strftime("%Y-%m-%d %H:%M") if hasattr(current_time, 'strftime') else str(current_time),
+                    "entry_price": float(entry_price),
+                    "exit_price": float(exit_price),
+                    "pnl_pct": float(pnl_pct),
+                    "exit_reason": exit_reason,
+                })
+                
+                position = 0
+                entry_price = 0.0
+                entry_idx = None
+                entry_time = None
+        
+        # Record position and equity (mark-to-market)
+        position_series.append(position)
+        if position == 0:
+            equity.append(equity[-1] if len(equity) > 0 else initial_capital)
+        else:
+            # Calculate current equity based on close price
+            bar_close = float(current_bar["close"])
+            unrealized_pnl = (bar_close - entry_price) / entry_price
+            new_equity = initial_capital * (1 + unrealized_pnl)
+            equity.append(new_equity)
+    
+    # Close any open position at the end
+    if position == 1 and entry_idx is not None:
+        final_price = float(df["close"].iloc[-1])
+        final_time = df.index[-1]
+        pnl_pct = (final_price - entry_price) / entry_price
+        trades.append({
+            "entry_idx": entry_idx,
+            "exit_idx": len(df) - 1,
+            "entry_time": entry_time.strftime("%Y-%m-%d %H:%M") if hasattr(entry_time, 'strftime') else str(entry_time),
+            "exit_time": final_time.strftime("%Y-%m-%d %H:%M") if hasattr(final_time, 'strftime') else str(final_time),
+            "entry_price": float(entry_price),
+            "exit_price": float(final_price),
+            "pnl_pct": float(pnl_pct),
+            "exit_reason": "END",
+        })
+    
+    df["position"] = position_series[:len(df)]
+    df["equity"] = equity[:len(df)]
+    df["strategy_return"] = df["equity"].pct_change().fillna(0)
+    
     return df, trades
 
 
@@ -423,8 +568,16 @@ async def execute_backtest(hypothesis: str, asset: str, timeframe: str, lookback
     # 3. Generate signals
     df = generate_signals(df, rules)
 
-    # 4. Run backtest
-    df, trades = run_backtest(df)
+    # 4. Run backtest (use SL/TP for confluence strategies)
+    strategy_type = rules.get("strategy_type", "rsi")
+    params = rules.get("parameters", {})
+    
+    if strategy_type == "confluence_rsi_ema":
+        sl_pct = params.get("sl_pct", 0.01)
+        tp_pct = params.get("tp_pct", 0.02)
+        df, trades = run_backtest_with_sl_tp(df, sl_pct=sl_pct, tp_pct=tp_pct)
+    else:
+        df, trades = run_backtest(df)
 
     # 5. Calculate metrics
     metrics = calculate_metrics(df, trades)

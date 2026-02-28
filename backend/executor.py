@@ -1,6 +1,128 @@
 """Code Generation - Generates standalone Python backtest code from trading rules."""
 
 
+def generate_backtest_logic(strategy_type: str) -> str:
+    """Generate the appropriate backtest logic based on strategy type."""
+    
+    if strategy_type == "confluence_rsi_ema":
+        # SL/TP backtest logic for confluence with entry/exit times
+        return '''# Bar-by-bar backtest with Stop Loss and Take Profit
+# Entry: at close of signal bar
+# Exit: SL/TP checked from next bar onward (avoid same-bar exit)
+# Conservative: if both SL and TP hit in same bar, SL takes precedence
+
+trades = []
+position = 0  # 0 = flat, 1 = long
+entry_price = 0.0
+entry_time = None
+sl_price = 0.0
+tp_price = 0.0
+
+equity = [INITIAL_CAPITAL]
+
+for i in range(1, len(df)):
+    current_bar = df.iloc[i]
+    current_time = df.index[i]
+    
+    if position == 0:
+        # Check for entry signal
+        if current_bar["signal"] == 1:
+            position = 1
+            entry_price = float(current_bar["close"])
+            entry_time = current_time
+            sl_price = entry_price * (1 - SL_PCT)
+            tp_price = entry_price * (1 + TP_PCT)
+            # Don't check SL/TP on entry bar - wait for next bar
+    else:
+        # In position - check SL/TP (evaluating current bar)
+        bar_high = float(current_bar["high"])
+        bar_low = float(current_bar["low"])
+        
+        sl_hit = bar_low <= sl_price
+        tp_hit = bar_high >= tp_price
+        
+        exit_price = None
+        exit_reason = None
+        
+        if sl_hit and tp_hit:
+            # Both hit in same bar - SL takes precedence (conservative)
+            exit_price = sl_price
+            exit_reason = "SL_same_bar"
+        elif sl_hit:
+            exit_price = sl_price
+            exit_reason = "SL"
+        elif tp_hit:
+            exit_price = tp_price
+            exit_reason = "TP"
+        
+        if exit_price is not None:
+            pnl_pct = (exit_price - entry_price) / entry_price
+            trades.append({
+                "entry_time": entry_time.strftime("%Y-%m-%d %H:%M"),
+                "exit_time": current_time.strftime("%Y-%m-%d %H:%M"),
+                "entry_price": float(entry_price),
+                "exit_price": float(exit_price),
+                "pnl_pct": float(pnl_pct),
+                "exit_reason": exit_reason,
+            })
+            position = 0
+            entry_price = 0.0
+            entry_time = None
+    
+    # Mark-to-market equity
+    if position == 1:
+        bar_close = float(current_bar["close"])
+        unrealized = (bar_close - entry_price) / entry_price
+        equity.append(INITIAL_CAPITAL * (1 + unrealized))
+    else:
+        if len(equity) > 0:
+            equity.append(equity[-1])
+        else:
+            equity.append(INITIAL_CAPITAL)
+
+# Close any open position at end
+if position == 1:
+    final_price = float(df["close"].iloc[-1])
+    final_time = df.index[-1]
+    pnl_pct = (final_price - entry_price) / entry_price
+    trades.append({
+        "entry_time": entry_time.strftime("%Y-%m-%d %H:%M"),
+        "exit_time": final_time.strftime("%Y-%m-%d %H:%M"),
+        "entry_price": float(entry_price),
+        "exit_price": float(final_price),
+        "pnl_pct": float(pnl_pct),
+        "exit_reason": "END",
+    })
+
+df["equity"] = equity[:len(df)]
+df["strategy_return"] = pd.Series(equity).pct_change().fillna(0).iloc[:len(df)]'''
+    else:
+        # Standard vectorized backtest for other strategies
+        return '''# Vectorized backtest
+df["position"] = df["signal"].replace(0, np.nan).ffill().fillna(0)
+df["market_return"] = df["close"].pct_change()
+df["strategy_return"] = df["position"].shift(1) * df["market_return"]
+df["strategy_return"] = df["strategy_return"].fillna(0)
+df["equity"] = INITIAL_CAPITAL * (1 + df["strategy_return"]).cumprod()
+
+# Extract trades
+trades = []
+in_trade = False
+entry_price = 0
+
+for i in range(1, len(df)):
+    prev_pos = df["position"].iloc[i - 1]
+    curr_pos = df["position"].iloc[i]
+    if not in_trade and curr_pos == 1:
+        in_trade = True
+        entry_price = df["close"].iloc[i]
+    elif in_trade and curr_pos != 1:
+        exit_price = df["close"].iloc[i]
+        pnl_pct = (exit_price - entry_price) / entry_price
+        trades.append(float(pnl_pct))
+        in_trade = False'''
+
+
 def generate_code(rules: dict, asset: str, timeframe: str, lookback: str) -> str:
     """Generate clean, readable Python backtest code from the trading rules."""
     strategy_type = rules.get("strategy_type", "rsi")
@@ -52,6 +174,13 @@ from datetime import datetime, timedelta
         code += f'MACD_SIGNAL = {params.get("signal_period", 9)}\n'
     elif strategy_type == "breakout":
         code += f'BREAKOUT_PERIOD = {params.get("breakout_period", 20)}\n'
+    elif strategy_type == "confluence_rsi_ema":
+        code += f'RSI_PERIOD = {params.get("rsi_period", 14)}\n'
+        code += f'RSI_ENTRY = {params.get("rsi_entry_threshold", 30)}\n'
+        code += f'FAST_EMA = {params.get("fast_period", 10)}\n'
+        code += f'SLOW_EMA = {params.get("slow_period", 50)}\n'
+        code += f'SL_PCT = {params.get("sl_pct", 0.01)}\n'
+        code += f'TP_PCT = {params.get("tp_pct", 0.02)}\n'
 
     code += '''
 # ============================================================
@@ -106,6 +235,12 @@ df["macd_signal"] = macd_df.iloc[:, 2]
         code += '''df["high_breakout"] = df["high"].rolling(window=BREAKOUT_PERIOD).max()
 df["low_breakout"] = df["low"].rolling(window=BREAKOUT_PERIOD).min()
 '''
+    elif strategy_type == "confluence_rsi_ema":
+        code += '''df["rsi"] = ta.rsi(df["close"], length=RSI_PERIOD)
+df["fast_ema"] = ta.ema(df["close"], length=FAST_EMA)
+df["slow_ema"] = ta.ema(df["close"], length=SLOW_EMA)
+df["confluence_long"] = (df["rsi"] < RSI_ENTRY) & (df["fast_ema"] > df["slow_ema"])
+'''
 
     code += '''
 df = df.dropna()
@@ -140,33 +275,18 @@ df.loc[df["macd"] < df["macd_signal"], "signal"] = -1  # Sell signal
         code += '''df.loc[df["close"] > df["high_breakout"].shift(1), "signal"] = 1   # Buy breakout
 df.loc[df["close"] < df["low_breakout"].shift(1), "signal"] = -1  # Sell breakdown
 '''
+    elif strategy_type == "confluence_rsi_ema":
+        code += '''# Confluence entry: RSI oversold + EMA uptrend
+df.loc[df["confluence_long"], "signal"] = 1
+df.loc[~df["confluence_long"], "signal"] = -1
+'''
 
     code += '''
 # ============================================================
 # 5. Run Backtest
 # ============================================================
-df["position"] = df["signal"].replace(0, np.nan).ffill().fillna(0)
-df["market_return"] = df["close"].pct_change()
-df["strategy_return"] = df["position"].shift(1) * df["market_return"]
-df["strategy_return"] = df["strategy_return"].fillna(0)
-df["equity"] = INITIAL_CAPITAL * (1 + df["strategy_return"]).cumprod()
 
-# Extract trades
-trades = []
-in_trade = False
-entry_price = 0
-
-for i in range(1, len(df)):
-    prev_pos = df["position"].iloc[i - 1]
-    curr_pos = df["position"].iloc[i]
-    if not in_trade and curr_pos == 1:
-        in_trade = True
-        entry_price = df["close"].iloc[i]
-    elif in_trade and curr_pos != 1:
-        exit_price = df["close"].iloc[i]
-        pnl_pct = (exit_price - entry_price) / entry_price
-        trades.append(float(pnl_pct))
-        in_trade = False
+''' + generate_backtest_logic(strategy_type) + '''
 
 # ============================================================
 # 6. Calculate Metrics

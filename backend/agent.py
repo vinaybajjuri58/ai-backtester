@@ -22,7 +22,7 @@ Hypothesis: "{hypothesis}"
 
 Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
 {{
-    "strategy_type": "rsi|ma_crossover|bollinger|macd|breakout|custom",
+    "strategy_type": "rsi|ma_crossover|bollinger|macd|breakout|confluence_rsi_ema|custom",
     "description": "Brief description of the strategy",
     "entry_condition": "Human-readable entry condition",
     "exit_condition": "Human-readable exit condition",
@@ -80,6 +80,13 @@ STRATEGY_CLASSIFICATIONS = {
         "description": "Price breakout strategies are trend-following — breaking a N-day high/low signals new momentum you aim to ride.",
         "reasoning": {
             "trend_following": "New highs/lows indicate strong directional momentum. Breakout traders follow the trend expecting continuation (Donchian/Turtle style).",
+        },
+    },
+    "confluence_rsi_ema": {
+        "default": "trend_following",
+        "description": "RSI + EMA confluence combines mean-reversion entry (oversold RSI) with trend confirmation (EMA alignment) for higher-probability entries.",
+        "reasoning": {
+            "trend_following": "EMA(10) > EMA(50) confirms uptrend, while RSI < 30 ensures buying at temporary weakness within the trend — confluence increases entry quality.",
         },
     },
 }
@@ -289,6 +296,50 @@ async def translate_hypothesis_kimi(hypothesis: str) -> Optional[dict]:
 def parse_hypothesis_fallback(hypothesis: str) -> dict:
     """Rule-based parser for common trading strategy patterns."""
     h = hypothesis.lower().strip()
+
+    # Confluence: RSI + EMA
+    if ('confluence' in h or ('rsi' in h and 'ema' in h)) and ('both' in h or 'and' in h):
+        # Extract RSI parameters
+        rsi_period_match = re.search(r'(\d+)\s*(?:period|day|bar)?\s*rsi', h)
+        rsi_period = int(rsi_period_match.group(1)) if rsi_period_match else 14
+        rsi_threshold_match = re.search(r'rsi\s*(?:is\s*)?(?:below|under|<)\s*(\d+)', h)
+        rsi_threshold = int(rsi_threshold_match.group(1)) if rsi_threshold_match else 30
+        
+        # Extract EMA parameters
+        ema_matches = re.findall(r'ema\s*\(?\s*(\d+)\s*\)?', h)
+        if len(ema_matches) >= 2:
+            fast_ema = int(ema_matches[0])
+            slow_ema = int(ema_matches[1])
+            if fast_ema > slow_ema:
+                fast_ema, slow_ema = slow_ema, fast_ema
+        else:
+            fast_ema, slow_ema = 10, 50
+        
+        # Extract SL/TP if mentioned
+        sl_match = re.search(r'stop\s*loss\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*%', h)
+        sl_pct = float(sl_match.group(1)) / 100 if sl_match else 0.01
+        tp_match = re.search(r'take\s*profit\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*%', h)
+        tp_pct = float(tp_match.group(1)) / 100 if tp_match else 0.02
+        
+        return {
+            "strategy_type": "confluence_rsi_ema",
+            "description": f"RSI({rsi_period}) < {rsi_threshold} + EMA({fast_ema}) > EMA({slow_ema}) confluence with SL {sl_pct*100:.0f}% / TP {tp_pct*100:.0f}%",
+            "entry_condition": f"RSI({rsi_period}) < {rsi_threshold} AND EMA({fast_ema}) > EMA({slow_ema})",
+            "exit_condition": f"Stop Loss {sl_pct*100:.0f}% OR Take Profit {tp_pct*100:.0f}%",
+            "indicators": [
+                {"name": "rsi", "params": {"period": rsi_period}},
+                {"name": "ema", "params": {"period": fast_ema}},
+                {"name": "ema", "params": {"period": slow_ema}},
+            ],
+            "parameters": {
+                "rsi_period": rsi_period,
+                "rsi_entry_threshold": rsi_threshold,
+                "fast_period": fast_ema,
+                "slow_period": slow_ema,
+                "sl_pct": sl_pct,
+                "tp_pct": tp_pct,
+            },
+        }
 
     # RSI strategies
     rsi_match = re.search(r'rsi\s*(?:drops?\s*)?(?:below|under|<)\s*(\d+)', h)
