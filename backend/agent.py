@@ -1,10 +1,43 @@
-"""LLM Strategy Translation - Converts plain English to structured trading rules."""
+"""LLM Strategy Translation - Converts plain English to structured trading rules.
+
+Supports multiple LLM providers:
+- Anthropic Claude (via ANTHROPIC_API_KEY)
+- Moonshot AI Kimi K2.5 (via MOONSHOT_API_KEY)
+
+Falls back to rule-based parsing if no LLM is available.
+"""
 
 import os
 import json
 import re
 import httpx
 from typing import Optional
+
+
+# ─── LLM Configuration ─────────────────────────────────────────────
+
+LLM_PROMPT_TEMPLATE = """You are a quantitative trading strategy parser. Convert the following plain English trading hypothesis into a structured JSON format.
+
+Hypothesis: "{hypothesis}"
+
+Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
+{{
+    "strategy_type": "rsi|ma_crossover|bollinger|macd|breakout|custom",
+    "description": "Brief description of the strategy",
+    "entry_condition": "Human-readable entry condition",
+    "exit_condition": "Human-readable exit condition",
+    "indicators": [
+        {{"name": "indicator_name", "params": {{"period": 14, ...}}}}
+    ],
+    "parameters": {{
+        "entry_threshold": value,
+        "exit_threshold": value,
+        ... any other relevant parameters
+    }}
+}}
+
+Indicator names must be one of: rsi, sma, ema, bbands, macd, atr, stoch
+Parameter keys should be descriptive. Include all numeric thresholds from the hypothesis."""
 
 
 # ─── Strategy Classification ───────────────────────────────────────
@@ -95,34 +128,25 @@ def classify_strategy(rules: dict) -> dict:
     }
 
 
-async def translate_hypothesis_llm(hypothesis: str) -> Optional[dict]:
-    """Use Claude API to translate plain English hypothesis to structured trading rules."""
+def _extract_json_from_text(text: str) -> Optional[dict]:
+    """Extract and parse JSON from text response."""
+    try:
+        # Try to extract JSON if wrapped in code blocks
+        json_match = re.search(r'\{[\s\S]*\}', text)
+        if json_match:
+            return json.loads(json_match.group())
+        return None
+    except json.JSONDecodeError:
+        return None
+
+
+async def translate_hypothesis_claude(hypothesis: str) -> Optional[dict]:
+    """Use Anthropic Claude API to translate hypothesis to structured trading rules."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return None
 
-    prompt = f"""You are a quantitative trading strategy parser. Convert the following plain English trading hypothesis into a structured JSON format.
-
-Hypothesis: "{hypothesis}"
-
-Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
-{{
-    "strategy_type": "rsi|ma_crossover|bollinger|macd|breakout|custom",
-    "description": "Brief description of the strategy",
-    "entry_condition": "Human-readable entry condition",
-    "exit_condition": "Human-readable exit condition",
-    "indicators": [
-        {{"name": "indicator_name", "params": {{"period": 14, ...}}}}
-    ],
-    "parameters": {{
-        "entry_threshold": value,
-        "exit_threshold": value,
-        ... any other relevant parameters
-    }}
-}}
-
-Indicator names must be one of: rsi, sma, ema, bbands, macd, atr, stoch
-Parameter keys should be descriptive. Include all numeric thresholds from the hypothesis."""
+    prompt = LLM_PROMPT_TEMPLATE.format(hypothesis=hypothesis)
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -142,13 +166,49 @@ Parameter keys should be descriptive. Include all numeric thresholds from the hy
             if response.status_code == 200:
                 data = response.json()
                 text = data["content"][0]["text"].strip()
-                # Try to extract JSON if wrapped in code blocks
-                json_match = re.search(r'\{[\s\S]*\}', text)
-                if json_match:
-                    return json.loads(json_match.group())
+                return _extract_json_from_text(text)
+            else:
+                print(f"Claude API error: {response.status_code} - {response.text}")
             return None
     except Exception as e:
-        print(f"LLM translation failed: {e}")
+        print(f"Claude translation failed: {e}")
+        return None
+
+
+async def translate_hypothesis_kimi(hypothesis: str) -> Optional[dict]:
+    """Use Moonshot AI Kimi K2.5 API to translate hypothesis to structured trading rules.
+    
+    Kimi API is OpenAI-compatible. Requires MOONSHOT_API_KEY environment variable.
+    """
+    api_key = os.environ.get("MOONSHOT_API_KEY")
+    if not api_key:
+        return None
+
+    prompt = LLM_PROMPT_TEMPLATE.format(hypothesis=hypothesis)
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://api.moonshot.cn/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "kimi-k2.5",
+                    "max_tokens": 1024,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            if response.status_code == 200:
+                data = response.json()
+                text = data["choices"][0]["message"]["content"].strip()
+                return _extract_json_from_text(text)
+            else:
+                print(f"Kimi API error: {response.status_code} - {response.text}")
+            return None
+    except Exception as e:
+        print(f"Kimi translation failed: {e}")
         return None
 
 
@@ -312,9 +372,37 @@ def parse_hypothesis_fallback(hypothesis: str) -> dict:
     }
 
 
+async def translate_hypothesis_llm(hypothesis: str) -> Optional[dict]:
+    """Try LLM providers in order: Claude -> Kimi.
+    
+    Returns the first successful result, or None if all fail.
+    """
+    # Try Claude first
+    result = await translate_hypothesis_claude(hypothesis)
+    if result:
+        print("Using Claude for strategy translation")
+        return result
+    
+    # Fall back to Kimi K2.5
+    result = await translate_hypothesis_kimi(hypothesis)
+    if result:
+        print("Using Kimi K2.5 for strategy translation")
+        return result
+    
+    return None
+
+
 async def translate_hypothesis(hypothesis: str) -> dict:
-    """Main entry point: try LLM first, fall back to rule-based parser."""
+    """Main entry point: try LLM first, fall back to rule-based parser.
+    
+    Priority:
+    1. Anthropic Claude (if ANTHROPIC_API_KEY is set)
+    2. Moonshot Kimi K2.5 (if MOONSHOT_API_KEY is set)
+    3. Rule-based regex parser (always available)
+    """
     result = await translate_hypothesis_llm(hypothesis)
     if result:
         return result
+    
+    print("Using rule-based parser for strategy translation")
     return parse_hypothesis_fallback(hypothesis)
