@@ -63,3 +63,4 @@ class BacktestResponse(BaseModel):
     generated_code: str
     strategy_rules: dict
     classification: dict         # Strategy classification info
+    last_3_trades: list[dict]    # Last 3 trades for verification

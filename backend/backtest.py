@@ -211,31 +211,53 @@ def run_backtest(df: pd.DataFrame) -> Tuple[pd.DataFrame, list]:
     initial_capital = 10000
     df["equity"] = initial_capital * (1 + df["strategy_return"]).cumprod()
 
-    # Extract individual trades
+    # Extract individual trades with timestamps
     trades = []
     in_trade = False
     entry_price = 0
     entry_idx = None
+    entry_time = None
 
     for i in range(1, len(df)):
         prev_pos = df["position"].iloc[i - 1]
         curr_pos = df["position"].iloc[i]
+        current_time = df.index[i]
 
         if not in_trade and curr_pos == 1:
             in_trade = True
             entry_price = df["close"].iloc[i]
             entry_idx = i
+            entry_time = current_time
         elif in_trade and curr_pos != 1:
             exit_price = df["close"].iloc[i]
             pnl_pct = (exit_price - entry_price) / entry_price
             trades.append({
                 "entry_idx": entry_idx,
                 "exit_idx": i,
+                "entry_time": entry_time.strftime("%Y-%m-%d %H:%M") if hasattr(entry_time, 'strftime') else str(entry_time),
+                "exit_time": current_time.strftime("%Y-%m-%d %H:%M") if hasattr(current_time, 'strftime') else str(current_time),
                 "entry_price": float(entry_price),
                 "exit_price": float(exit_price),
                 "pnl_pct": float(pnl_pct),
+                "exit_reason": "SIGNAL",
             })
             in_trade = False
+
+    # Close any open position at the end
+    if in_trade and entry_idx is not None:
+        final_price = float(df["close"].iloc[-1])
+        final_time = df.index[-1]
+        pnl_pct = (final_price - entry_price) / entry_price
+        trades.append({
+            "entry_idx": entry_idx,
+            "exit_idx": len(df) - 1,
+            "entry_time": entry_time.strftime("%Y-%m-%d %H:%M") if hasattr(entry_time, 'strftime') else str(entry_time),
+            "exit_time": final_time.strftime("%Y-%m-%d %H:%M") if hasattr(final_time, 'strftime') else str(final_time),
+            "entry_price": float(entry_price),
+            "exit_price": float(final_price),
+            "pnl_pct": float(pnl_pct),
+            "exit_reason": "END",
+        })
 
     return df, trades
 
@@ -609,9 +631,13 @@ async def execute_backtest(hypothesis: str, asset: str, timeframe: str, lookback
     df_wf = df_wf.dropna()
     walk_forward = run_walk_forward(df_wf, rules)
 
+    # 9. Get last 3 trades for verification
+    last_3_trades = trades[-3:] if len(trades) >= 3 else trades
+
     return {
         "metrics": metrics,
         "equity_curve": equity_curve,
         "monte_carlo": monte_carlo,
+        "last_3_trades": last_3_trades,
         "walk_forward": walk_forward,
     }
