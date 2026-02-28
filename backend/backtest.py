@@ -6,6 +6,38 @@ import yfinance as yf
 import pandas_ta as ta
 from typing import Tuple
 from datetime import datetime, timedelta
+import pytz
+
+# Timezone constants
+UTC_TZ = pytz.UTC
+IST_TZ = pytz.timezone('Asia/Kolkata')
+
+
+def format_time_utc_ist(timestamp) -> dict:
+    """Format timestamp in both UTC and IST.
+    
+    Returns dict with:
+    - utc: "YYYY-MM-DD HH:MM UTC"
+    - ist: "YYYY-MM-DD HH:MM IST"
+    """
+    if timestamp is None:
+        return {"utc": "", "ist": ""}
+    
+    # Ensure timestamp is timezone-aware in UTC
+    if hasattr(timestamp, 'tz_localize'):
+        if timestamp.tz is None:
+            timestamp = timestamp.tz_localize(UTC_TZ)
+        else:
+            timestamp = timestamp.tz_convert(UTC_TZ)
+    
+    # Format UTC time
+    utc_str = timestamp.strftime("%Y-%m-%d %H:%M") + " UTC"
+    
+    # Convert to IST and format
+    ist_time = timestamp.tz_convert(IST_TZ)
+    ist_str = ist_time.strftime("%Y-%m-%d %H:%M") + " IST"
+    
+    return {"utc": utc_str, "ist": ist_str}
 
 
 ASSET_MAP = {
@@ -232,11 +264,16 @@ def run_backtest(df: pd.DataFrame) -> Tuple[pd.DataFrame, list]:
         elif in_trade and curr_pos != 1:
             exit_price = df["close"].iloc[i]
             pnl_pct = (exit_price - entry_price) / entry_price
+            entry_times = format_time_utc_ist(entry_time)
+            exit_times = format_time_utc_ist(current_time)
             trades.append({
                 "entry_idx": entry_idx,
                 "exit_idx": i,
-                "entry_time": entry_time.strftime("%Y-%m-%d %H:%M") if hasattr(entry_time, 'strftime') else str(entry_time),
-                "exit_time": current_time.strftime("%Y-%m-%d %H:%M") if hasattr(current_time, 'strftime') else str(current_time),
+                "signal_type": "LONG",  # Buy signal entry, Sell signal exit
+                "entry_time": entry_times["utc"],
+                "entry_time_ist": entry_times["ist"],
+                "exit_time": exit_times["utc"],
+                "exit_time_ist": exit_times["ist"],
                 "entry_price": float(entry_price),
                 "exit_price": float(exit_price),
                 "pnl_pct": float(pnl_pct),
@@ -249,11 +286,16 @@ def run_backtest(df: pd.DataFrame) -> Tuple[pd.DataFrame, list]:
         final_price = float(df["close"].iloc[-1])
         final_time = df.index[-1]
         pnl_pct = (final_price - entry_price) / entry_price
+        entry_times = format_time_utc_ist(entry_time)
+        exit_times = format_time_utc_ist(final_time)
         trades.append({
             "entry_idx": entry_idx,
             "exit_idx": len(df) - 1,
-            "entry_time": entry_time.strftime("%Y-%m-%d %H:%M") if hasattr(entry_time, 'strftime') else str(entry_time),
-            "exit_time": final_time.strftime("%Y-%m-%d %H:%M") if hasattr(final_time, 'strftime') else str(final_time),
+            "signal_type": "LONG",
+            "entry_time": entry_times["utc"],
+            "entry_time_ist": entry_times["ist"],
+            "exit_time": exit_times["utc"],
+            "exit_time_ist": exit_times["ist"],
             "entry_price": float(entry_price),
             "exit_price": float(final_price),
             "pnl_pct": float(pnl_pct),
@@ -339,11 +381,16 @@ def run_backtest_with_sl_tp(df: pd.DataFrame, sl_pct: float = 0.01, tp_pct: floa
             if exit_price is not None:
                 # Close the trade
                 pnl_pct = (exit_price - entry_price) / entry_price
+                entry_times = format_time_utc_ist(entry_time)
+                exit_times = format_time_utc_ist(current_time)
                 trades.append({
                     "entry_idx": entry_idx,
                     "exit_idx": i,
-                    "entry_time": entry_time.strftime("%Y-%m-%d %H:%M") if hasattr(entry_time, 'strftime') else str(entry_time),
-                    "exit_time": current_time.strftime("%Y-%m-%d %H:%M") if hasattr(current_time, 'strftime') else str(current_time),
+                    "signal_type": "LONG",
+                    "entry_time": entry_times["utc"],
+                    "entry_time_ist": entry_times["ist"],
+                    "exit_time": exit_times["utc"],
+                    "exit_time_ist": exit_times["ist"],
                     "entry_price": float(entry_price),
                     "exit_price": float(exit_price),
                     "pnl_pct": float(pnl_pct),
@@ -371,11 +418,16 @@ def run_backtest_with_sl_tp(df: pd.DataFrame, sl_pct: float = 0.01, tp_pct: floa
         final_price = float(df["close"].iloc[-1])
         final_time = df.index[-1]
         pnl_pct = (final_price - entry_price) / entry_price
+        entry_times = format_time_utc_ist(entry_time)
+        exit_times = format_time_utc_ist(final_time)
         trades.append({
             "entry_idx": entry_idx,
             "exit_idx": len(df) - 1,
-            "entry_time": entry_time.strftime("%Y-%m-%d %H:%M") if hasattr(entry_time, 'strftime') else str(entry_time),
-            "exit_time": final_time.strftime("%Y-%m-%d %H:%M") if hasattr(final_time, 'strftime') else str(final_time),
+            "signal_type": "LONG",
+            "entry_time": entry_times["utc"],
+            "entry_time_ist": entry_times["ist"],
+            "exit_time": exit_times["utc"],
+            "exit_time_ist": exit_times["ist"],
             "entry_price": float(entry_price),
             "exit_price": float(final_price),
             "pnl_pct": float(pnl_pct),

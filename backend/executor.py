@@ -63,8 +63,11 @@ for i in range(1, len(df)):
         if exit_price is not None:
             pnl_pct = (exit_price - entry_price) / entry_price
             trades.append({
-                "entry_time": entry_time.strftime("%Y-%m-%d %H:%M"),
-                "exit_time": current_time.strftime("%Y-%m-%d %H:%M"),
+                "signal_type": "LONG",
+                "entry_time": entry_time.strftime("%Y-%m-%d %H:%M UTC"),
+                "entry_time_ist": (entry_time + pd.Timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M IST"),
+                "exit_time": current_time.strftime("%Y-%m-%d %H:%M UTC"),
+                "exit_time_ist": (current_time + pd.Timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M IST"),
                 "entry_price": float(entry_price),
                 "exit_price": float(exit_price),
                 "pnl_pct": float(pnl_pct),
@@ -91,8 +94,11 @@ if position == 1:
     final_time = df.index[-1]
     pnl_pct = (final_price - entry_price) / entry_price
     trades.append({
-        "entry_time": entry_time.strftime("%Y-%m-%d %H:%M"),
-        "exit_time": final_time.strftime("%Y-%m-%d %H:%M"),
+        "signal_type": "LONG",
+        "entry_time": entry_time.strftime("%Y-%m-%d %H:%M UTC"),
+        "entry_time_ist": (entry_time + pd.Timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M IST"),
+        "exit_time": final_time.strftime("%Y-%m-%d %H:%M UTC"),
+        "exit_time_ist": (final_time + pd.Timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M IST"),
         "entry_price": float(entry_price),
         "exit_price": float(final_price),
         "pnl_pct": float(pnl_pct),
