@@ -153,7 +153,7 @@ from datetime import datetime, timedelta
 
     asset_map = {"BTC/USDT": "BTC-USD", "ETH/USDT": "ETH-USD"}
     ticker = asset_map.get(asset, "BTC-USD")
-    lookback_map = {"3 months": 90, "6 months": 180, "1 year": 365, "2 years": 730}
+    lookback_map = {"1 month": 30, "3 months": 90, "6 months": 180, "1 year": 365, "2 years": 730}
     days = lookback_map.get(lookback, 365)
 
     code += f'TICKER = "{ticker}"\n'

@@ -23,6 +23,7 @@ TIMEFRAME_MAP = {
 }
 
 LOOKBACK_MAP = {
+    "1 month": 30,
     "3 months": 90,
     "6 months": 180,
     "1 year": 365,

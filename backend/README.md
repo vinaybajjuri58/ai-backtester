@@ -51,7 +51,7 @@ Converts plain English trading hypotheses into structured rules using:
 - Yahoo Finance via `yfinance` library
 - Assets: BTC/USDT, ETH/USDT (mapped to BTC-USD, ETH-USD)
 - Timeframes: 1m, 5m, 15m, 1h, 4h, 1d
-- Lookback: 3 months to 2 years
+- Lookback: 1 month to 2 years
 
 **Technical Indicators:**
 - RSI (Relative Strength Index)
@@ -102,7 +102,7 @@ BacktestRequest {
     hypothesis: str   # Natural language strategy description
     asset: str        # Trading pair (e.g., "BTC/USDT")
     timeframe: str    # 1m, 5m, 15m, 1h, 4h, 1d
-    lookback: str     # 3 months, 6 months, 1 year, 2 years
+    lookback: str     # 1 month, 3 months, 6 months, 1 year, 2 years
 }
 ```
 
